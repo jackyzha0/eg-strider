@@ -1,0 +1,35 @@
+Running baseline
+Running candidate
+Running candidate-repeat
+Running baseline-repeat
+{
+  "first": {
+    "S": 1.249587552883786,
+    "per_trace_speedup": {
+      "ascii-tail-tiny": 1.4416243654822334,
+      "unicode-batched-concurrent": 1.0885096386374629,
+      "unicode-random-short": 1.2434137876636693
+    },
+    "unchanged_reference_ratios": {
+      "ascii-tail-tiny": 1.024977293369664,
+      "unicode-batched-concurrent": 1.0046331870088174,
+      "unicode-random-short": 0.9337241296805838
+    },
+    "control_passed": true
+  },
+  "repeat": {
+    "S": 1.2540413991124049,
+    "per_trace_speedup": {
+      "ascii-tail-tiny": 1.4368600682593855,
+      "unicode-batched-concurrent": 1.100898104002661,
+      "unicode-random-short": 1.246734628862695
+    },
+    "unchanged_reference_ratios": {
+      "ascii-tail-tiny": 1.0430913348946136,
+      "unicode-batched-concurrent": 0.9917121882678248,
+      "unicode-random-short": 1.028807992336116
+    },
+    "control_passed": true
+  },
+  "accepted": true
+}

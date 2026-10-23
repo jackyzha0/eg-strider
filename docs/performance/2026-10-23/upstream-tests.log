@@ -1,0 +1,171 @@
+   Compiling strider-tree v0.1.0 (/workspace/crates/strider-tree)
+   Compiling strider-text v0.1.0 (/workspace/crates/strider-text)
+   Compiling eg-strider v0.1.0 (/workspace/crates/eg-strider)
+   Compiling compare v0.1.0 (/workspace/compare)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.82s
+     Running unittests src/lib.rs (/target/debug/deps/compare-a3d94732c131ef14)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/target/debug/deps/compare-f61d654e2f23f3c5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential.rs (/target/debug/deps/differential-b64cb8f6da687fe1)
+
+running 7 tests
+test four_replicas_working_apart ... ok
+test long_histories ... ok
+test many_replicas ... ok
+test three_replicas_with_long_branches ... ok
+test two_replicas_syncing_often ... ok
+test two_replicas_working_apart ... ok
+test long_histories_working_apart ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 75.67s
+
+     Running tests/trace.rs (/target/debug/deps/trace-8226f335d7df01ac)
+
+running 3 tests
+test a_parent_after_its_child_is_refused ... ok
+test a_trace_numbers_events_in_transaction_order ... ok
+test a_trace_merges_to_its_text ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/target/debug/deps/eg_strider-8173d2441af7f1db)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/checkout.rs (/target/debug/deps/checkout-57e32d7b56dbb9f8)
+
+running 13 tests
+test a_run_that_follows_earlier_typing_is_merged_with_it ... ok
+test an_event_made_partway_through_a_run_of_backspaces ... ok
+test checking_out_again_and_after_growing_gives_the_same_document ... ok
+test an_event_from_before_the_last_merge_is_merged_into_it ... ok
+test concurrent_edits_at_one_place_go_to_the_tracker ... ok
+test concurrent_deletes_of_the_same_text ... ok
+test concurrent_edits_that_keep_apart_are_merged_by_shifting ... ok
+test concurrent_inserts_at_one_position_do_not_interleave ... ok
+test holding_backspace_in_a_run_is_stored_as_deletes_made_at_once ... ok
+test holding_backspace_is_stored_as_one_delete ... ok
+test paper_figure_4 ... ok
+test sequential_edits ... ok
+test ops_arriving_as_a_run_merge_as_they_do_one_at_a_time ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/file.rs (/target/debug/deps/file-7e3f5ab16b63121a)
+
+running 7 tests
+test a_file_cut_short_is_refused ... ok
+test a_loaded_log_carries_on_as_the_original_does ... ok
+test a_saved_log_loads_with_its_document ... ok
+test an_empty_log_is_saved_and_loaded ... ok
+test an_event_at_an_old_version_reads_only_the_history_since ... ok
+test a_damaged_file_is_refused_or_loaded_but_never_panics ... ok
+test damaged_saved_history_is_refused_when_read_back ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/target/debug/deps/strider_graph-fa452dfa19e8b149)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/incremental.rs (/target/debug/deps/incremental-24fdc864929cd402)
+
+running 1 test
+test running_analysis_matches_a_fresh_one ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running tests/ranges.rs (/target/debug/deps/ranges-6791d45978097e03)
+
+running 4 tests
+test a_parent_in_the_middle_of_a_chain_splits_it ... ok
+test a_fork_and_merge_is_a_concurrent_range_between_linear_ones ... ok
+test concurrent_roots_are_a_concurrent_range ... ok
+test linear_history_is_one_run_and_one_range ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/walk.rs (/target/debug/deps/walk-a2653f95341f8327)
+
+running 1 test
+test every_block_is_applied_at_its_parents_version ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running unittests src/lib.rs (/target/debug/deps/strider_text-47a66b3379456dbd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/piece_table.rs (/target/debug/deps/piece_table-db479cc5240fa5ef)
+
+running 7 tests
+test ascii_matches_a_plain_list ... ok
+test any_text_matches_a_plain_list ... ok
+test long_histories_match_a_plain_list ... ok
+test nothing_typed_gives_nothing ... ok
+test stopping_early_panics - should panic ... ok
+test taking_back_more_than_there_is_panics - should panic ... ok
+test long_inserts_match_a_plain_list ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.24s
+
+     Running unittests src/lib.rs (/target/debug/deps/strider_tree-281894daca8f7c64)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tree.rs (/target/debug/deps/tree-4e7cd19ac2db6d94)
+
+running 3 tests
+test matches_a_plain_list_with_tiny_nodes ... ok
+test reset_starts_over ... ok
+test matches_a_plain_list_with_wide_nodes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.65s
+
+   Doc-tests compare
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eg_strider
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests strider_graph
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests strider_text
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests strider_tree
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

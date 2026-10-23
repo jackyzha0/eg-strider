@@ -1,0 +1,116 @@
+{
+  "S": 1.2638996467832704,
+  "per_trace_speedup": {
+    "A1": 1.1315162741465996,
+    "A2": 1.0867004872743404,
+    "C1": 1.2966426646940257,
+    "C2": 1.3171754367851694,
+    "S1": 1.161029557627455,
+    "S2": 1.2602307357422724,
+    "S3": 1.67671869475173
+  },
+  "reopen_speedup": {
+    "A1": 0.9916107382550335,
+    "A2": 1.0028968713789108,
+    "C1": 0.9992537313432834,
+    "C2": 0.9944881889763779,
+    "S1": 1.0032030749519538,
+    "S2": 1.0036798528058877,
+    "S3": 0.9958592132505176
+  },
+  "candidate_merge_ms": {
+    "A1": 6.0464,
+    "A2": 13.9757,
+    "C1": 14.7349,
+    "C2": 17.4342,
+    "S1": 2.0164,
+    "S2": 2.7564,
+    "S3": 1.9797
+  },
+  "baseline_merge_ms": {
+    "A1": 6.8416,
+    "A2": 15.1874,
+    "C1": 19.1059,
+    "C2": 22.9639,
+    "S1": 2.3411,
+    "S2": 3.4737,
+    "S3": 3.3194
+  },
+  "control_check": {
+    "passed": true,
+    "unchanged_diamond_types_ratios": {
+      "A1": 1.0217431117342075,
+      "A2": 0.9974611344903141,
+      "C1": 1.0295863314749356,
+      "C2": 1.0120285180249824,
+      "S1": 1.0140309265648102,
+      "S2": 1.0290696004366184,
+      "S3": 1.0336851267544336
+    },
+    "maximum_reference_drift": 0.05
+  },
+  "repeat": {
+    "S": 1.240740423327971,
+    "per_trace_speedup": {
+      "A1": 1.1103450567341717,
+      "A2": 1.0681682352009332,
+      "C1": 1.2769899032536984,
+      "C2": 1.3011609813097629,
+      "S1": 1.1315381150207717,
+      "S2": 1.2327206551410372,
+      "S3": 1.6467078084357627
+    },
+    "reopen_speedup": {
+      "A1": 0.9949832775919732,
+      "A2": 1.0034582132564842,
+      "C1": 1.0037425149700598,
+      "C2": 0.9992119779353821,
+      "S1": 1.0025624599615632,
+      "S2": 1.006381039197812,
+      "S3": 0.9889731219848379
+    },
+    "candidate_merge_ms": {
+      "A1": 6.0193,
+      "A2": 13.8877,
+      "C1": 14.6879,
+      "C2": 17.2871,
+      "S1": 1.9979,
+      "S2": 2.7475,
+      "S3": 1.9607
+    },
+    "baseline_merge_ms": {
+      "A1": 6.6835,
+      "A2": 14.8344,
+      "C1": 18.7563,
+      "C2": 22.4933,
+      "S1": 2.2607,
+      "S2": 3.3869,
+      "S3": 3.2287
+    },
+    "control_check": {
+      "passed": true,
+      "unchanged_diamond_types_ratios": {
+        "A1": 1.0105184167684167,
+        "A2": 0.9934512459398727,
+        "C1": 1.0168287495083979,
+        "C2": 0.9854823961372804,
+        "S1": 1.0024984093977438,
+        "S2": 1.0290082776880665,
+        "S3": 1.0229796506828963
+      },
+      "maximum_reference_drift": 0.05
+    }
+  },
+  "timing_cpu": 3,
+  "timing_attempt": 1,
+  "reps": 100,
+  "timing_control": "unchanged diamond-types must remain within 10% on every trace",
+  "confirmed_improvement": true,
+  "source_sha256": "47ddc3d6d06441f6b7e8c03e7251471aac9803de35bbece8f02732d6570c9c6c",
+  "executable_sha256": "285990f3fa24587a15ea68243515c616a02b9c5aa9640a278618d10427f7e26d",
+  "correctness": "all unchanged upstream tests and seven diamond-types trace oracles passed",
+  "submission_id": "aa98473b207043a1a679d8f4ea36ff18",
+  "worker": "worker-7",
+  "strategy": "Actual pair integration accepted521b core/adaptive-prefix/exhaustion + bfe6 unified reverse cancellation/no-trim append. Both exact manifests reproduced and all27 benchmarked separately first; existing checks precede cancellation/exhaustion, pending intervals become irrelevant only after every survivor is emitted. Full frozen workspace suite(cancel-combo-tests.log), all27 unchanged compare oracles,70000 generated Unicode/NUL cancellation/exhaustion/base-cut scenarios pass. Fresh-process parent/candidate/parent compare10: marginal paperGM1.0341-1.0398, expandedGM1.0256-1.0289; S3+18.6-19.8%,S2~7.5%, ASCII-tail-batched~20-23%. A2 andC2 can regress~1-2%, worstexpanded~1.5%; no score arithmetic. Original7 savedbytes shrink2..2984, retainedheapunchanged; transientpeak96..384bytes lower C/S. Expandeddelete-heavy kept-352/-400bytes, otherkeptunchanged. Reopen/current/old increments separate: currentA2~7%slower in onepair, oldedits mostlyfaster/noisy. Sourcecevalidated; ownUTF8span and other p",
+  "verified_unix": 1792725121.4358509
+}

@@ -1,0 +1,19 @@
+   Compiling num-traits v0.2.19
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.5.0
+   Compiling tempfile v3.27.0
+   Compiling rusty-fork v0.3.1
+   Compiling rand v0.10.3
+   Compiling strider-text v0.1.0 (/workspace/crates/strider-text)
+   Compiling proptest v1.12.0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.19s
+     Running tests/reverse_replay.rs (/target/debug/deps/reverse_replay-ac4c5d1731ff11cf)
+
+running 4 tests
+test erased_output_still_checks_utf8_boundaries - should panic ... ok
+test erased_output_still_checks_insert_positions - should panic ... ok
+test erased_output_still_requires_complete_reverse_replay - should panic ... ok
+test reverse_replay_matches_forward_edits_with_erased_prefixes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

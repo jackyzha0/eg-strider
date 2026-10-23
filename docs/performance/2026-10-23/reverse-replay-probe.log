@@ -1,0 +1,4 @@
+   Compiling strider-text v0.1.0 (/workspace/crates/strider-text)
+    Finished `release` profile [optimized] target(s) in 2.79s
+     Running `/target/release/examples/reverse_replay_probe 10000`
+70000 Unicode cancellation/exhaustion/base-cut scenarios passed
