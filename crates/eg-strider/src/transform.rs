@@ -77,10 +77,9 @@ pub(crate) fn merge_by_transforming(
                 OperationKind::Delete => place_removal(edited, spare, in_range, version, stable_runs, op.pos as i64, op.len as i64),
             };
             match (at, op.kind) {
-                (Some(at), OperationKind::Insert) => transformed.insert(at as u32, op.len),
+                (Some(at), OperationKind::Insert) => transformed.insert(at as u32, op.len, op.text),
                 (Some(at), OperationKind::Delete) => {
                     transformed.remove(at as u32, op.len);
-                    transformed.end_delete();
                 }
                 (None, _) => {
                     transformed.undo_to(mark);

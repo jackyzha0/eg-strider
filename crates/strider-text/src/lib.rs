@@ -10,6 +10,9 @@ pub struct PieceTable<'a> {
     pieces: PieceList,
     /// Length of the document as undone so far.
     len: u32,
+    /// A restored deleted interval, not yet placed in `pieces`. Inserts undone wholly inside
+    /// it can be cancelled without editing the piece list at all.
+    pending_deleted: Option<(u32, u32)>,
     /// The final text, a byte per character with non-ASCII characters as [`NON_ASCII_MARK`], then
     /// [`SHORT`] spare bytes.
     final_text_bytes: Vec<u8>,
@@ -18,6 +21,8 @@ pub struct PieceTable<'a> {
     non_ascii_pages: Vec<Option<u32>>,
     /// The final text's non-ASCII characters, by position within their page.
     non_ascii_chars: Vec<char>,
+    /// Final characters whose source text has not yet been reached by reverse replay.
+    remaining: u32,
 }
 
 /// Stands for a non-ASCII character in `final_text_bytes`.
@@ -85,9 +90,11 @@ impl<'a> PieceTable<'a> {
             inserted_text,
             pieces: PieceList::new(len),
             len,
+            pending_deleted: None,
             final_text_bytes: vec![0; len as usize + SHORT],
             non_ascii_pages: Vec::new(),
             non_ascii_chars: Vec::new(),
+            remaining: len,
         }
     }
 
@@ -102,15 +109,51 @@ impl<'a> PieceTable<'a> {
             return;
         }
         self.len -= len;
+        // Once all final characters are known, earlier text can only be deleted text.
+        // Keep validating the operations and tracking their lengths, but no longer
+        // maintain a piece list with nothing left to emit.
+        if self.remaining == 0 {
+            return;
+        }
+        let ascii = text.len() == len as usize;
+        let (mut pos, mut len, mut skipped) = (pos, len, 0);
+        if let Some((at, deleted)) = self.pending_deleted {
+            if pos >= at && pos - at <= deleted && len <= deleted - (pos - at) {
+                self.pending_deleted = (deleted > len).then_some((at, deleted - len));
+                return;
+            }
+            let end = pos + len;
+            if pos < at && end > at && end <= at + deleted {
+                // Only the insert's prefix survived the pending deletion.
+                self.pending_deleted = (end < at + deleted).then_some((pos, at + deleted - end));
+                len = at - pos;
+            } else if pos >= at && pos < at + deleted && end > at + deleted {
+                // Only its suffix survived. The undeleted prefix of the pending interval stays.
+                self.pending_deleted = (pos > at).then_some((at, pos - at));
+                skipped = at + deleted - pos;
+                len -= skipped;
+                pos = at;
+            } else {
+                self.flush_deleted();
+            }
+        }
         let (final_text_bytes, pages, chars) = (&mut self.final_text_bytes, &mut self.non_ascii_pages, &mut self.non_ascii_chars);
-        if text.len() == len as usize {
+        let remaining = &mut self.remaining;
+        if ascii {
             // All ASCII: characters and bytes coincide.
-            self.pieces.remove(pos, len, |at, skip, n| copy(final_text_bytes, at as usize, inserted_text, start + skip as usize, n as usize));
+            self.pieces.remove(pos, len, |at, skip, n| {
+                *remaining -= n;
+                copy(final_text_bytes, at as usize, inserted_text, start + (skipped + skip) as usize, n as usize)
+            });
         } else {
             // The survivors come in the order they have in `text`, so one pass over it
             // reaches them all. `passed` counts the characters gone by.
             let (mut rest, mut passed) = (text.chars(), 0);
+            if skipped > 0 {
+                rest.nth(skipped as usize - 1);
+            }
             self.pieces.remove(pos, len, |at, skip, n| {
+                *remaining -= n;
                 if skip > passed {
                     rest.nth((skip - passed - 1) as usize);
                 }
@@ -129,11 +172,41 @@ impl<'a> PieceTable<'a> {
             return;
         }
         self.len = self.len.checked_add(len).expect("document too long");
-        self.pieces.insert_deleted(pos, len);
+        if self.remaining == 0 {
+            return;
+        }
+        if let Some((at, deleted)) = self.pending_deleted {
+            if pos >= at && pos - at <= deleted {
+                self.pending_deleted = Some((at, deleted + len));
+                return;
+            }
+            self.flush_deleted();
+        }
+        self.pending_deleted = Some((pos, len));
+    }
+
+    fn flush_deleted(&mut self) {
+        if let Some((pos, len)) = self.pending_deleted.take() {
+            self.pieces.insert_deleted(pos, len);
+        }
     }
 
     /// Undoes all remaining operations at once, given the text they produced.
     pub fn undo_rest(&mut self, text: &str) {
+        if self.remaining == 0 {
+            // The remaining document is entirely deleted. Retain the same traversal and
+            // end check as an all-deleted piece list, without its obsolete topology.
+            if text.len() != self.len as usize {
+                let mut rest = text.chars();
+                if self.len > 0 {
+                    rest.nth(self.len as usize - 1);
+                }
+                assert!(rest.next().is_none(), "the text is not the document as it stands");
+            }
+            self.len = 0;
+            return;
+        }
+        self.flush_deleted();
         let (final_text_bytes, pages, chars) = (&mut self.final_text_bytes, &mut self.non_ascii_pages, &mut self.non_ascii_chars);
         if text.len() == self.len as usize {
             // All ASCII: characters and bytes coincide.
@@ -158,6 +231,7 @@ impl<'a> PieceTable<'a> {
             assert!(rest.next().is_none(), "the text is not the document as it stands");
         }
         self.len = 0;
+        self.remaining = 0;
     }
 
     /// The final text, once every operation is undone.

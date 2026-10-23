@@ -91,6 +91,13 @@ impl PieceListNode {
         self.pieces.copy_within(i + 1..self.len, i);
         self.len -= 1;
     }
+
+    /// Removes consecutive whole pieces, compacting the remaining suffix only once.
+    fn remove_range(&mut self, from: usize, to: usize) {
+        self.touch(from);
+        self.pieces.copy_within(to..self.len, from);
+        self.len -= to - from;
+    }
 }
 
 /// The document as an unrolled linked list of pieces: stretches that survive at a known place in
@@ -167,7 +174,7 @@ impl PieceList {
             let node = &mut self.nodes[id as usize];
             let (i, offset) = node.find(pos - start);
             let piece = node.piece(i);
-            let n = (piece.len - offset).min(len - done);
+            let mut n = (piece.len - offset).min(len - done);
             // Surviving text with a piece taken out of its middle becomes two pieces: its
             // halves are no longer next to each other in the final text.
             let halved = offset > 0 && offset + n < piece.len && piece.at != DELETED;
@@ -179,7 +186,31 @@ impl PieceList {
                 survivor(piece.at + offset, done, n);
             }
             // `seam`: the piece that now starts where the removed characters were.
-            let seam = if offset == 0 && n == piece.len {
+            let seam = if n < len - done {
+                // The removal carries on past this piece. Walk the rest of this node
+                // before moving its suffix, rather than refinding and shifting it for
+                // every fully covered piece.
+                let from = i + usize::from(offset > 0);
+                if offset > 0 {
+                    node.set(i, piece.with_len(offset));
+                }
+                let mut next = i + 1;
+                while next < node.len() && n < len - done {
+                    let piece = node.piece(next);
+                    let taken = piece.len.min(len - done - n);
+                    if piece.at != DELETED {
+                        survivor(piece.at, done + n, taken);
+                    }
+                    n += taken;
+                    if taken < piece.len {
+                        node.set(next, piece.after(taken));
+                        break;
+                    }
+                    next += 1;
+                }
+                node.remove_range(from, next);
+                Some(from)
+            } else if offset == 0 && n == piece.len {
                 node.remove(i);
                 Some(i)
             } else if offset == 0 {

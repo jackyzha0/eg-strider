@@ -210,6 +210,16 @@ impl OpLog {
         text: &str,
     ) -> Result<Range<EventIndex>, Malformed> {
         self.unpack_needed_history(parents)?;
+        // One operation owns all the supplied text. No character-to-byte boundary or
+        // within-chain run needs to be found, as it does for a longer chain.
+        if let [op] = ops {
+            let (kind, backward, pos, len) = match *op {
+                Operation::Insert { pos, len } => (OperationKind::Insert, false, pos, len),
+                Operation::Delete { pos, len, backward } => (OperationKind::Delete, backward, pos, len),
+            };
+            debug_assert_eq!(text.chars().count(), if kind == OperationKind::Insert { len as usize } else { 0 }, "the text is not what the inserts put in");
+            return Ok(self.append_events(replica, Some(sequence_number), Some(parents), kind, backward, pos as usize, len as usize, text));
+        }
         let event = self.graph.len();
         let total = self.append_operations(event, parents, ops, text);
         if total == 0 {
@@ -224,72 +234,61 @@ impl OpLog {
     /// graph and replica runs. Not inlined, so that its loop keeps the op being built in registers.
     #[inline(never)]
     fn append_operations(&mut self, event: EventIndex, parents: &[EventIndex], ops: &[Operation], text: &str) -> u32 {
-        let parts = |edit: &Operation| match *edit {
-            Operation::Insert { pos, len } => (OperationKind::Insert, false, pos, len),
-            Operation::Delete { pos, len, backward } => (OperationKind::Delete, backward, pos, len),
-        };
         // The op being built, which each edit that carries it on is joined into. It is stored
         // once one does not, so that most edits change nothing in memory.
         let mut last = if event > 0 && parents == [event - 1] { self.ops.pop() } else { None };
         let mut inserted = 0;
         let mut at = self.inserted_text.len() as u32;
-        self.inserted_text.push_str(text);
+        self.append_text(text);
         let end = u32::try_from(self.inserted_text.len()).expect("more inserted text than a u32 counts");
         // Characters and bytes coincide in ASCII text. `plain` is where the text stops being
         // ASCII: found again only once an insert reaches it, since such characters are few.
         let ascii_until = |from: u32| from + ascii_prefix(&text.as_bytes()[(from - (end - text.len() as u32)) as usize..]) as u32;
         let mut plain = ascii_until(at);
-        // The insert just before, if only deletes of its end have followed: where what is
-        // left of it ends, and how much is left.
-        let (mut next, mut open) = (event, None::<(u32, u32)>);
+        let mut next = event;
         let mut i = 0;
         while let Some(edit) = ops.get(i) {
             i += 1;
-            let (kind, mut backward, mut pos, mut len) = parts(edit);
+            if let Operation::Insert { pos, len } = *edit {
+                if len == 0 {
+                    continue;
+                }
+                let bytes = if len <= plain.saturating_sub(at) {
+                    len
+                } else {
+                    let bytes = self.prefix((at, end), len);
+                    plain = ascii_until(at + bytes);
+                    bytes
+                };
+                let op = OperationRun::new(next, len, OperationKind::Insert, false, false, pos, at + bytes);
+                if !last.as_mut().is_some_and(|last| last.append(op)) {
+                    self.ops.extend(last.replace(op));
+                }
+                inserted += len;
+                (at, next) = (at + bytes, next.checked_add(len).expect("more events than a u32 counts"));
+                continue;
+            }
+            let Operation::Delete { mut pos, mut len, mut backward } = *edit else { unreachable!() };
             if len == 0 {
                 continue;
             }
             // Holding backspace: deletes of one character, each just before the one before,
-            // often hundreds in a row. They are taken as one delete that runs backwards, no
-            // longer than what is left of the insert before if the first trims it.
-            if kind == OperationKind::Delete && len == 1 && matches!(ops.get(i), Some(&Operation::Delete { pos: at, len: 1, .. }) if at + 1 == pos) {
+            // often hundreds in a row. They are taken as one delete that runs backwards.
+            if len == 1 && matches!(ops.get(i), Some(&Operation::Delete { pos: at, len: 1, .. }) if at + 1 == pos) {
                 // Rare in most histories, and laid out away from the rest so that it costs
                 // them nothing much; where it is common, a whole run is taken at once.
                 std::hint::cold_path();
-                let room = match open {
-                    Some((end, left)) if pos + 1 == end && left >= 1 => left,
-                    _ => MAX_OP_LEN,
-                };
-                let held = held_backspaces(&ops[i..], pos, room - 1);
+                let held = held_backspaces(&ops[i..], pos, MAX_OP_LEN - 1);
                 if held > 0 {
                     (backward, pos, len) = (true, pos - held, len + held);
                     i += held as usize;
                 }
             }
-            let bytes = match kind {
-                OperationKind::Delete => 0,
-                OperationKind::Insert if len <= plain.saturating_sub(at) => len,
-                OperationKind::Insert => {
-                    let bytes = self.prefix((at, end), len);
-                    plain = ascii_until(at + bytes);
-                    bytes
-                }
-            };
-            let deletes_end_of_previous_insert = kind == OperationKind::Delete && open.is_some_and(|(end, left)| pos + len == end && len <= left);
-            let op = OperationRun::new(next, len, kind, backward, deletes_end_of_previous_insert, pos, at + bytes);
-            if kind == OperationKind::Insert {
-                inserted += len;
-            }
+            let op = OperationRun::new(next, len, OperationKind::Delete, backward, false, pos, at);
             if !last.as_mut().is_some_and(|last| last.append(op)) {
                 self.ops.extend(last.replace(op));
             }
-            let whole = last.map_or(len, |last| last.len());
-            open = match kind {
-                OperationKind::Insert => Some((pos + len, whole)),
-                OperationKind::Delete if deletes_end_of_previous_insert => open.map(|(end, left)| (end - len, left - len)),
-                OperationKind::Delete => None,
-            };
-            (at, next) = (at + bytes, next.checked_add(len).expect("more events than a u32 counts"));
+            next = next.checked_add(len).expect("more events than a u32 counts");
         }
         self.ops.extend(last);
         // Every event either inserts or removes a character.
@@ -319,7 +318,7 @@ impl OpLog {
         let pos = u32::try_from(pos).expect("a position past what a u32 counts");
         let (continues, events) = self.add_to_causal_graph(parents, len);
         self.assign_replica(replica, sequence_number, event, len);
-        self.inserted_text.push_str(text);
+        self.append_text(text);
         let end = u32::try_from(self.inserted_text.len()).expect("more inserted text than a u32 counts");
         self.append_operation_run(continues, OperationRun::new(event, len, kind, backward, false, pos, end));
         events
@@ -374,6 +373,39 @@ impl OpLog {
         }
     }
 
+    /// Appends a complete UTF-8 payload, keeping tiny copies in the caller.
+    #[inline]
+    fn append_text(&mut self, text: &str) {
+        let n = text.len();
+        if n == 0 {
+            return;
+        }
+        if n > 8 {
+            self.inserted_text.push_str(text);
+            return;
+        }
+        // SAFETY: reserve makes the destination writable for all n bytes. Every load and
+        // store is inside those n bytes; overlapping destination words write identical
+        // bytes. Only after the entire valid string has been copied is its length exposed.
+        unsafe {
+            let bytes = self.inserted_text.as_mut_vec();
+            bytes.reserve(n);
+            let old = bytes.len();
+            let to = bytes.as_mut_ptr().add(old);
+            let from = text.as_ptr();
+            if n >= 4 {
+                std::ptr::copy_nonoverlapping(from, to, 4);
+                std::ptr::copy_nonoverlapping(from.add(n - 4), to.add(n - 4), 4);
+            } else if n >= 2 {
+                std::ptr::copy_nonoverlapping(from, to, 2);
+                std::ptr::copy_nonoverlapping(from.add(n - 2), to.add(n - 2), 2);
+            } else {
+                *to = *from;
+            }
+            bytes.set_len(old + n);
+        }
+    }
+
     /// Stores an op, joining it onto the last when it `follows` it and continues it.
     fn append_operation_run(&mut self, follows: bool, op: OperationRun) {
         match op.kind() {
@@ -406,22 +438,36 @@ impl OpLog {
     #[cold]
     fn prefix(&self, bytes: ByteRange, len: u32) -> u32 {
         let text = self.text(bytes);
-        match text.char_indices().nth(len as usize) {
-            Some((bytes, _)) => bytes as u32,
-            None => {
-                debug_assert_eq!(text.chars().count(), len as usize, "the text is not what the inserts put in");
-                text.len() as u32
+        // Consume exactly the requested characters and inspect the iterator's remaining
+        // slice, rather than decoding one extra character just to obtain its byte index.
+        let consumed = |text: &str, len: usize| {
+            let mut chars = text.chars();
+            if len > 0 {
+                let last = chars.nth(len - 1);
+                debug_assert!(last.is_some(), "the text is not what the inserts put in");
             }
+            text.len() - chars.as_str().len()
+        };
+        if len < 64 {
+            return consumed(text, len as usize) as u32;
         }
-    }
-
-    /// What is left of the insert text at `bytes`, `len` characters long, after a
-    /// [trimming](OperationRun::deletes_end_of_previous_insert) delete of its last `cut`.
-    pub(crate) fn trimmed(&self, bytes: ByteRange, len: u32, cut: u32) -> ByteRange {
-        if bytes.1 - bytes.0 == len {
-            return (bytes.0, bytes.1 - cut);
+        let (mut at, mut remaining) = (0, len as usize);
+        // Each character occupies at least one byte. Taking `remaining` bytes therefore
+        // cannot pass the requested character boundary. Count this prefix in bulk, then
+        // repeat for the characters still missing; every byte is counted only once.
+        while remaining >= 64 {
+            let mut end = (at + remaining).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == text.len() {
+                debug_assert_eq!(text[at..].chars().count(), remaining, "the text is not what the inserts put in");
+                return end as u32;
+            }
+            remaining -= text[at..end].chars().count();
+            at = end;
         }
-        (bytes.0, bytes.0 + self.prefix(bytes, len - cut))
+        (at + consumed(&text[at..], remaining)) as u32
     }
 
     /// The replica and sequence number of `event`.
@@ -448,6 +494,11 @@ impl OpLog {
         let mut op = 0;
         starts
             .map(|event| {
+                // The terminal boundary is already known. In a long linear range this avoids
+                // walking every operation merely to discover that none follow the last event.
+                if event == self.graph.len() {
+                    return self.ops.len() as OperationRunIndex;
+                }
                 while self.ops.get(op).is_some_and(|op| op.first_event + op.len() <= event) {
                     op += 1;
                 }
@@ -464,6 +515,20 @@ impl OpLog {
         let straddles = self.ops.get(ops.end as usize).is_some_and(|op| op.first_event < events.end);
         let count = if events.is_empty() { 0 } else { (ops.end - ops.start) as usize + straddles as usize };
         (ops.start as usize..ops.start as usize + count).map(move |op| self.slice(op, &events))
+    }
+
+    /// The event spans and kinds in a range, without decoding positions or inserted text.
+    /// Moving the prepare version only needs these two fields.
+    pub(crate) fn event_kinds(
+        &self,
+        ops: Range<OperationRunIndex>,
+        events: Range<EventIndex>,
+    ) -> impl Iterator<Item = (OperationKind, Range<EventIndex>)> + '_ {
+        let straddles = self.ops.get(ops.end as usize).is_some_and(|op| op.first_event < events.end);
+        let count = if events.is_empty() { 0 } else { (ops.end - ops.start) as usize + straddles as usize };
+        self.ops[ops.start as usize..ops.start as usize + count].iter().map(move |op| {
+            (op.kind(), events.start.max(op.first_event)..events.end.min(op.first_event + op.len()))
+        })
     }
 
     pub(crate) fn op_containing(&self, event: EventIndex) -> OperationRunIndex {

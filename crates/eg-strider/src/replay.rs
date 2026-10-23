@@ -6,18 +6,21 @@ use std::ops::Range;
 use strider_graph::{walk, EventIndex, EventRunIndex, HistoryRange, WalkStep};
 use strider_text::PieceTable;
 
-/// The paper's transformed operations for the concurrent ranges, stored as their positions in the
-/// effect version; the rest of each is its operation run.
+/// An edit in the merged document. Empty text denotes a removal; insertions carry
+/// the byte range already resolved while visiting their operation run.
+struct TransformedEdit {
+    pos: u32,
+    len: u32,
+    text: ByteRange,
+}
+
+/// The paper's transformed operations for the concurrent ranges, ready to undo
+/// without slicing their operation runs a second time.
 #[derive(Default)]
 pub(crate) struct TransformedOperations {
-    /// Ranges of event runs, in merge order. Within a range, an operation run spanning several
-    /// event runs is one operation.
-    merge_order: Vec<Range<EventRunIndex>>,
-    /// Per operation run of those ranges. An insert: the index it went in at. A delete: the index
-    /// and length of each piece it removed, then the number of pieces.
-    positions: Vec<u32>,
-    /// Pieces the current delete has removed so far.
-    removed_pieces: u32,
+    edits: Vec<TransformedEdit>,
+    /// Earlier edits belong to completed concurrent ranges and cannot be joined.
+    coalesce_from: usize,
     /// Length of the effect version so far.
     len: u32,
     /// The first run whose events the base does not hold; earlier runs' operations are not
@@ -32,16 +35,21 @@ impl TransformedOperations {
     pub(crate) fn begin(&mut self, run_range: Range<EventRunIndex>) {
         self.in_base = run_range.end <= self.first_new_run;
         debug_assert!(self.in_base || run_range.start >= self.first_new_run, "runs with events on both sides of the base");
-        if !self.in_base {
-            self.merge_order.push(run_range);
-        }
     }
 
     /// Records that an insert of `len` characters went in at `pos`.
-    pub(crate) fn insert(&mut self, pos: u32, len: u32) {
+    pub(crate) fn insert(&mut self, pos: u32, len: u32, text: ByteRange) {
         if !self.in_base {
             self.len += len;
-            self.positions.push(pos);
+            if self.edits.len() > self.coalesce_from {
+                let last = self.edits.last_mut().expect("an edit in the current range");
+                if last.text.0 != last.text.1 && last.pos + last.len == pos && last.text.1 == text.0 {
+                    last.len += len;
+                    last.text.1 = text.1;
+                    return;
+                }
+            }
+            self.edits.push(TransformedEdit { pos, len, text });
         }
     }
 
@@ -49,28 +57,26 @@ impl TransformedOperations {
     pub(crate) fn remove(&mut self, pos: u32, len: u32) {
         if !self.in_base {
             self.len -= len;
-            self.positions.extend([pos, len]);
-            self.removed_pieces += 1;
-        }
-    }
-
-    /// Ends the current delete.
-    pub(crate) fn end_delete(&mut self) {
-        if !self.in_base {
-            self.positions.push(std::mem::take(&mut self.removed_pieces));
+            if self.edits.len() > self.coalesce_from {
+                let last = self.edits.last_mut().expect("an edit in the current range");
+                if last.text.0 == last.text.1 && last.pos == pos {
+                    last.len += len;
+                    return;
+                }
+            }
+            self.edits.push(TransformedEdit { pos, len, text: (0, 0) });
         }
     }
 
     /// Marks where things stand, for [`undo_to`](Self::undo_to).
-    pub(crate) fn mark(&self) -> (usize, usize, u32) {
-        (self.merge_order.len(), self.positions.len(), self.len)
+    pub(crate) fn mark(&self) -> (usize, u32) {
+        (self.edits.len(), self.len)
     }
 
     /// Forgets what was recorded since `mark`.
-    pub(crate) fn undo_to(&mut self, mark: (usize, usize, u32)) {
-        self.merge_order.truncate(mark.0);
-        self.positions.truncate(mark.1);
-        self.len = mark.2;
+    pub(crate) fn undo_to(&mut self, mark: (usize, u32)) {
+        self.edits.truncate(mark.0);
+        self.len = mark.1;
     }
 }
 
@@ -110,7 +116,7 @@ pub(crate) struct ReplayPlan {
     first_op_of_run: Vec<OperationRunIndex>,
     /// Per range, the cached CRDT result: empty for linear ranges and those merged by transforming.
     resolved: Vec<ResolvedOrigins>,
-    /// How many positions the concurrent ranges took last time, to reserve next time.
+    /// How many translated edits the concurrent ranges took last time, to reserve next time.
     room: usize,
 }
 
@@ -193,16 +199,9 @@ pub(crate) fn replay(log: &OpLog, plan: &mut Option<ReplayPlan>, base: &Document
     let events = |run_range: &Range<EventRunIndex>| runs.start(run_range.start)..runs.start(run_range.end);
     debug_assert!((log.graph.first_held_event()..log.graph.len()).contains(&base.events), "a base the log does not reach back to");
     let first_new_run = runs.containing(base.events);
-    // Each run of a concurrent range after the base is begun at most once, so that is room
-    // enough for the merge order.
-    let concurrent_runs = plan.ranges.iter().map(|range| match range {
-        HistoryRange::Concurrent(concurrent) => concurrent.end.saturating_sub(concurrent.start.max(first_new_run)) as usize,
-        HistoryRange::Linear(_) => 0,
-    });
     let mut transformed = TransformedOperations {
-        merge_order: Vec::with_capacity(concurrent_runs.sum()),
-        positions: Vec::with_capacity(plan.room),
-        removed_pieces: 0,
+        edits: Vec::with_capacity(plan.room),
+        coalesce_from: 0,
         len: base.chars,
         first_new_run,
         in_base: false,
@@ -210,6 +209,7 @@ pub(crate) fn replay(log: &OpLog, plan: &mut Option<ReplayPlan>, base: &Document
     // Space that transforming reuses from one concurrent range to the next, since a merge can
     // transform thousands.
     let (mut versions, mut stable, mut edited, mut spare) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut concurrent_edits = Vec::new();
     // The ranges that have events after the base, and for each the first of those.
     let after = |range: &HistoryRange| Some(events(range.runs())).filter(|events| events.end > base.events).map(|events| events.start.max(base.events));
     for (range, resolved) in plan.ranges.iter().zip(&mut resolved) {
@@ -222,6 +222,8 @@ pub(crate) fn replay(log: &OpLog, plan: &mut Option<ReplayPlan>, base: &Document
                 transformed.len = transformed.len + inserted - removed;
             }
             HistoryRange::Concurrent(concurrent) => {
+                let before = transformed.edits.len();
+                transformed.coalesce_from = before;
                 debug_assert_eq!(from, runs.start(first_new_run.max(concurrent.start)), "a base partway through a run of a concurrent range");
                 // Nothing resolved: the range has not needed the CRDT records so far. See whether
                 // it does now.
@@ -240,65 +242,40 @@ pub(crate) fn replay(log: &OpLog, plan: &mut Option<ReplayPlan>, base: &Document
                 if !merged {
                     replay_concurrent_range(log, plan, concurrent, resolved, &mut transformed)
                 }
+                concurrent_edits.push(transformed.edits.len() - before);
             }
         }
     }
     // The text is built without the room that merging took.
     drop((versions, stable, edited, spare));
     plan.resolved = resolved;
-    plan.room = transformed.positions.len();
+    plan.room = transformed.edits.len();
 
     // Backwards: take every operation back, starting from the final document.
     let mut text = PieceTable::new(transformed.len, log.inserted_text());
     let bytes = |(start, end): ByteRange| start as usize..end as usize;
-    let mut merge_order = transformed.merge_order.iter().rev().peekable();
-    let mut positions = transformed.positions.iter().rev().copied();
-    let mut position = || positions.next().expect("a position for every operation of a concurrent range");
-    let mut trimming_deletes: Vec<OperationRunSlice> = Vec::new();
+    let mut edits = transformed.edits.iter().rev();
+    let mut concurrent_edits = concurrent_edits.into_iter().rev();
     for range in plan.ranges.iter().rev() {
         let Some(from) = after(range) else { break };
         match range {
             HistoryRange::Linear(linear) => {
+                // The piece table cancels erased text in both linear and transformed streams.
+                // Keep the original byte range: no character-boundary scan is needed to trim it.
                 for op in plan.ops_from(log, linear, from).rev() {
-                    // A delete that takes back the end of the insert before it is met first.
-                    // The two together are a shorter insert, so it only has to be counted.
-                    if op.deletes_end_of_previous_insert {
-                        trimming_deletes.push(op);
-                        continue;
-                    }
-                    let cut = trimming_deletes.iter().map(|delete| delete.len).sum::<u32>();
-                    let folds = cut > 0
-                        && op.kind == OperationKind::Insert
-                        && cut <= op.len
-                        && trimming_deletes.last().is_some_and(|first| first.first_event == op.first_event + op.len);
-                    if cut > 0 && !folds {
-                        // Not enough of the insert is here: this range begins partway through
-                        // it.
-                        trimming_deletes.drain(..).for_each(|delete| text.undo_remove(delete.pos, delete.len));
-                    }
                     match op.kind {
-                        OperationKind::Insert if folds => {
-                            text.undo_insert(op.pos, bytes(log.trimmed(op.text, op.len, cut)), op.len - cut);
-                            trimming_deletes.clear();
-                        }
                         OperationKind::Insert => text.undo_insert(op.pos, bytes(op.text), op.len),
                         OperationKind::Delete => text.undo_remove(op.pos, op.len),
                     }
                 }
-                trimming_deletes.drain(..).for_each(|delete| text.undo_remove(delete.pos, delete.len));
             }
-            HistoryRange::Concurrent(concurrent) => {
-                while let Some(run_range) = merge_order.next_if(|run_range| run_range.start >= concurrent.start) {
-                    for op in plan.ops(log, run_range).rev() {
-                        match op.kind {
-                            OperationKind::Insert => text.undo_insert(position(), bytes(op.text), op.len),
-                            OperationKind::Delete => {
-                                for _ in 0..position() {
-                                    let (len, pos) = (position(), position());
-                                    text.undo_remove(pos, len);
-                                }
-                            }
-                        }
+            HistoryRange::Concurrent(_) => {
+                let count = concurrent_edits.next().expect("an edit count for each concurrent range");
+                for edit in edits.by_ref().take(count) {
+                    if edit.text.0 == edit.text.1 {
+                        text.undo_remove(edit.pos, edit.len);
+                    } else {
+                        text.undo_insert(edit.pos, bytes(edit.text), edit.len);
                     }
                 }
             }
@@ -344,7 +321,7 @@ fn replay_concurrent_range(
                 OperationKind::Insert => {
                     let (left, right) = (next(), next());
                     let pos = records.insert_with_known_origins(event, op.len, left, right, goes_before);
-                    transformed.insert(pos, op.len);
+                    transformed.insert(pos, op.len, op.text);
                 }
                 OperationKind::Delete => {
                     let mut done = 0;
@@ -357,7 +334,6 @@ fn replay_concurrent_range(
                         });
                         done += n;
                     }
-                    transformed.end_delete();
                 }
             }
         }
@@ -368,15 +344,21 @@ fn replay_concurrent_range(
 
     // What the document holds is gone through before anything else, so that where the rest goes
     // is a position in that document.
+    let event_kinds = |range: &Range<EventRunIndex>| {
+        log.event_kinds(
+            plan.first_op_of_run[range.start as usize]..plan.first_op_of_run[range.end as usize],
+            runs.start(range.start)..runs.start(range.end),
+        )
+    };
     walk(runs, range, known_runs, (held_until - range.start) as usize, |step| match step {
         WalkStep::Retreat(run_range) => {
-            for op in plan.ops(log, &run_range) {
-                records.retreat(op.kind, op.first_event - start..op.first_event - start + op.len);
+            for (kind, events) in event_kinds(&run_range) {
+                records.retreat(kind, events.start - start..events.end - start);
             }
         }
         WalkStep::Advance(run_range) => {
-            for op in plan.ops(log, &run_range) {
-                records.advance(op.kind, op.first_event - start..op.first_event - start + op.len);
+            for (kind, events) in event_kinds(&run_range) {
+                records.advance(kind, events.start - start..events.end - start);
             }
         }
         WalkStep::Apply(run) => {
@@ -419,11 +401,10 @@ fn apply(
     match op.kind {
         OperationKind::Insert => {
             let pos = records.insert(event, op.len, op.pos, goes_before);
-            transformed.insert(pos, op.len);
+            transformed.insert(pos, op.len, op.text);
         }
         OperationKind::Delete => {
             records.delete(event, op.pos, op.len, op.backward, |pos, len| transformed.remove(pos, len));
-            transformed.end_delete();
         }
     }
 }

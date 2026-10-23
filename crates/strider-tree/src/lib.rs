@@ -44,6 +44,19 @@ pub struct Cursor {
     slot: u32,
 }
 
+/// The last selection, including the prefix before its slot inside the leaf. The two
+/// prefixes let nearby selections advance without scanning the leaf from its beginning.
+#[derive(Clone, Copy)]
+struct Finger {
+    view: View,
+    leaf: u32,
+    start: u32,
+    effect: u32,
+    slot: usize,
+    within: u32,
+    effect_within: u32,
+}
+
 /// A child and its lengths (its subtree's totals in an inner node), kept together so that searching
 /// a node reads one array.
 #[derive(Clone, Copy)]
@@ -92,17 +105,20 @@ impl<const N: usize> Node<N> {
         self.slots[..child].iter().map(|slot| slot.lengths().of(view)).sum()
     }
 
-    /// The child holding position `index` of `view`, and the offset into it; `None` past the end.
-    fn find(&self, view: View, mut index: u32) -> Option<(usize, u32)> {
+    /// The child holding position `index` of `view`, the offset into it, and its effect
+    /// position. Both lengths are read together rather than scanning the prefix again.
+    fn find(&self, view: View, mut index: u32) -> Option<(usize, u32, u32)> {
         let mut child = 0;
+        let mut effect = 0;
         while index >= self.slots[child].lengths().of(view) {
             index -= self.slots[child].lengths().of(view);
+            effect += self.slots[child].effect_len;
             child += 1;
             if child >= self.len as usize {
                 return None;
             }
         }
-        Some((child, index))
+        Some((child, index, effect))
     }
 
     /// The slot holding `child`.
@@ -162,7 +178,7 @@ pub struct PrepareEffectTree<const N: usize = 32> {
     leaf_of_entry: Vec<u32>,
     /// Where the last select ended: its view, its leaf, and where that leaf starts in that view and
     /// in the effect version. Cleared when lengths change in another leaf.
-    finger: Option<(View, u32, u32, u32)>,
+    finger: Option<Finger>,
 }
 
 impl<const N: usize> PrepareEffectTree<N> {
@@ -284,30 +300,51 @@ impl<const N: usize> PrepareEffectTree<N> {
     /// Selects as [`char_index_to_entry`](Self::char_index_to_entry) does, also returning the
     /// entry's position in the effect version.
     pub fn locate(&mut self, view: View, index: u32) -> (Cursor, u32, u32) {
-        if let Some((seen, leaf, start, effect)) = self.finger {
-            let found = if seen == view && index >= start { self.leaves[leaf as usize].find(view, index - start) } else { None };
-            if let Some((slot, offset)) = found {
-                return (Cursor { leaf, slot: slot as u32 }, offset, effect + self.leaves[leaf as usize].start(View::Effect, slot));
+        if let Some(finger) = &mut self.finger {
+            if finger.view == view && index >= finger.start {
+                let leaf = &self.leaves[finger.leaf as usize];
+                let index = index - finger.start;
+                while index < finger.within {
+                    finger.slot -= 1;
+                    let lengths = leaf.slots[finger.slot].lengths();
+                    finger.within -= lengths.of(view);
+                    finger.effect_within -= lengths.effect;
+                }
+                while finger.slot < leaf.len as usize && index >= finger.within + leaf.slots[finger.slot].lengths().of(view) {
+                    let lengths = leaf.slots[finger.slot].lengths();
+                    finger.within += lengths.of(view);
+                    finger.effect_within += lengths.effect;
+                    finger.slot += 1;
+                }
+                if finger.slot < leaf.len as usize {
+                    return (Cursor { leaf: finger.leaf, slot: finger.slot as u32 }, index - finger.within, finger.effect + finger.effect_within);
+                }
             }
         }
         let (mut node_id, mut rest, mut effect) = (self.root, index, 0);
         for _ in 0..self.height {
             let node = &self.nodes[node_id as usize];
-            let child;
-            (child, rest) = node.find(view, rest).expect("index is past the end");
-            effect += node.start(View::Effect, child);
+            let (child, offset, before) = node.find(view, rest).expect("index is past the end");
+            rest = offset;
+            effect += before;
             node_id = node.slots[child].child;
         }
         let leaf = &self.leaves[node_id as usize];
-        let (slot, offset) = leaf.find(view, rest).expect("index is past the end");
-        let within = leaf.start(View::Effect, slot);
-        self.finger = Some((view, node_id, index - rest, effect));
+        let (slot, offset, within) = leaf.find(view, rest).expect("index is past the end");
+        self.finger = Some(Finger { view, leaf: node_id, start: index - rest, effect, slot, within: rest - offset, effect_within: within });
         (Cursor { leaf: node_id, slot: slot as u32 }, offset, effect + within)
     }
 
-    /// Drops the finger unless it is in `leaf`, whose lengths are about to change.
-    fn changing(&mut self, leaf: u32) {
-        self.finger = self.finger.filter(|&(_, last, ..)| last == leaf);
+    /// A change at or after the cached slot leaves its prefixes valid. An earlier change
+    /// starts the next search at the leaf's beginning; a different leaf drops the finger.
+    fn changing(&mut self, at: Cursor) {
+        if let Some(finger) = &mut self.finger {
+            if finger.leaf != at.leaf {
+                self.finger = None;
+            } else if (at.slot as usize) < finger.slot {
+                (finger.slot, finger.within, finger.effect_within) = (0, 0, 0);
+            }
+        }
     }
 
     /// Ranks an entry: its position in `view`.
@@ -353,7 +390,7 @@ impl<const N: usize> PrepareEffectTree<N> {
 
     /// Sets an entry's lengths, returning the change.
     fn replace(&mut self, at: Cursor, lengths: Lengths) -> Lengths {
-        self.changing(at.leaf);
+        self.changing(at);
         let slot = &mut self.leaves[at.leaf as usize].slots[at.slot as usize];
         let delta = lengths.minus(slot.lengths());
         slot.set_lengths(lengths);
@@ -398,7 +435,7 @@ impl<const N: usize> PrepareEffectTree<N> {
             Cursor { leaf, slot: self.leaves[leaf as usize].len }
         });
         let at = self.make_room(before);
-        self.changing(at.leaf);
+        self.changing(at);
         let id = self.new_entry(at.leaf);
         self.leaves[at.leaf as usize].insert(at.slot as usize, id, lengths);
         (id, at)
@@ -408,7 +445,7 @@ impl<const N: usize> PrepareEffectTree<N> {
     /// just after, returning the new id and both entries' cursors in order.
     pub fn split_entry(&mut self, at: Cursor, lengths: Lengths, before: bool) -> (EntryId, [Cursor; 2]) {
         let at = self.make_room(at);
-        self.changing(at.leaf);
+        self.changing(at);
         let id = self.new_entry(at.leaf);
         // The leaf's total is unchanged, so no ancestor needs updating.
         self.leaves[at.leaf as usize].split_child(at.slot as usize, id, lengths, before);
